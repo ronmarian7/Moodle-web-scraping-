@@ -192,25 +192,26 @@ try:
         in_table = []
         in_table.append(out_table[i].find_elements_by_css_selector('h6.event-name'))
         temp_task.append(in_table)
-    # making a list containing the dates with multi
+    # making a list containing the dates with duplicents
     new_dates_list = []
     for i in range(len(temp_task)):
         for j in range(len(temp_task[i][0])):
             new_dates_list.append(dates_list[i])
+            
     with open(config.INPUT_FILE2, 'w', newline='', encoding='utf-8') as csv_file:
         csv_writer = csv.writer(csv_file)
         csv_writer.writerow(['Course', 'Task', 'Date', 'Time'])
         for i in range(len(courses_list)):
             csv_writer.writerow([f'{courses_list[i]}', f'{tasks_list[i]}', f'{new_dates_list[i]}', f'{times_list[i]}'])
 
-    diff_status = find_diff()  # running the func to see if there is any diff between the file of prev
-    # if diff_status is True then there is a difference between the files to send notification/
-    if diff_status:
+    diff_status = find_diff()  # running the func to see if there is any diff between the file of previous run and the current run
+  
+    if diff_status:   # if diff_status is True then there is a difference between the files to send notification
         send_notification()
 
 except Exception as e:
     print(e)
-    # if there is any error make a file and write the message
+    # if there is any error make a file and write the error message
     with open("Error File.txt", 'w', encoding='utf-8') as t1:
         t1.write(f"{e}")
     raise e
