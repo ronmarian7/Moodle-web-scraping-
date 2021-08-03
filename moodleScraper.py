@@ -156,7 +156,6 @@ sleep(10) # letting the page to load
 
 try:
     login_in()
-    sleep(40)
 
     time_table_area = WebDriverWait(driver, 60).until(
         EC.visibility_of_element_located((By.ID, "page-container-2")))  # looking for the container of the tasks in the page
