@@ -16,14 +16,11 @@ import datefinder
 import config
 
 
-
-def create_event(start_time_str: str, summary: str):
+def connect_to_google_calendar():
     """
-    Creating event in google calendar
-    :param start_time_str: the time of the event in str format
-    :param summary: the title of the event
-    :return: None
-    """
+        Connecting to google calendar api
+        :return: google calendar api service
+        """
     SCOPES = ['https://www.googleapis.com/auth/calendar']
 
     creds = None
@@ -44,27 +41,33 @@ def create_event(start_time_str: str, summary: str):
         with open('token.json', 'w') as token:
             token.write(creds.to_json())
 
-    service = build('calendar', 'v3', credentials=creds)
+    return build('calendar', 'v3', credentials=creds)
 
+
+def create_event(start_time_str: str, summary: str, service):
+    """
+        Creating event in google calendar
+        :param start_time_str: the time of the event in str format
+        :param summary: the title of the event
+         :param service: google calendar api service
+        :return: None
+        """
     # Call the Calendar API
     calendar_list = service.calendarList().list().execute()
-    tasks_calender_id = calendar_list['items'][1]['id']
+    for calendar in calendar_list['items']:  # find the wanted calendar
+        if calendar['summary'] == 'מטלות':
+            tasks_calender_id = calendar['id']
 
     start_time = list(datefinder.find_dates(start_time_str))[0].date()
-
     end_time = start_time
-    timezone = 'Asia/Jerusalem'
-
     # Build the event
     event = {
         'summary': summary,
         'start': {
-            'date': start_time.strftime("%Y-%d-%m"),
-            'timeZone': timezone,
+            'date': start_time.strftime("%Y-%m-%d"),
         },
         'end': {
-            'date': end_time.strftime("%Y-%d-%m"),
-            'timeZone': timezone,
+            'date': end_time.strftime("%Y-%m-%d"),
         },
     }
     # Send insert command to google api to insert the event to the requested calendar
@@ -78,14 +81,14 @@ def send_mail(subject, body):
     :param body: mail body
     :return: None
     """
-    # Build the message block  
+    # Build the message block
     msg = EmailMessage()
     msg['Subject'] = subject
     msg['From'] = config.EMAIL_ADDRESS
     msg['To'] = config.EMAIL_ADDRESS
     msg.set_content(body)
     with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-        # logging using the Credentials above
+        # logging using the Credentials
         smtp.login(config.EMAIL_ADDRESS, config.EMAIL_PASSWORD)
         # send the mail
         smtp.send_message(msg)
@@ -115,23 +118,46 @@ def send_notification():
     if there are any changes send an email with the task information and add the task to google calendar
     :return: None
     """
+    calendar_service = connect_to_google_calendar()
     with open(config.OUTPUT_PATH, 'r', encoding='utf-8') as outFile:
-        out_file = outFile.readlines()
-        if len(out_file) != 0:
-            for line in out_file:
-                course, task, date, time = line.split(',', 3)
-                subject = f'{course} {task}'
-                body = f' פורסמה {task} בקורס {course} להגשה בתאריך {date} בשעה {time}'
-                send_mail(subject, body)  # call the mail sender func
-                create_event(date, f'{task}-{course}')  # call the google calendar func to make event
+        out_file = csv.reader(outFile)
+        for line in out_file:
+            course = line[0]
+            task = line[1]
+            date = line[2]
+            time = line[3]
+            subject = f'{course} {task}'
+            body = f' פורסמה {task} בקורס {course} להגשה בתאריך {date} בשעה {time}'
+            send_mail(subject, body)  # call the mail sender func
+            create_event(date, f'{task}-{course}',calendar_service)  # call the google calendar func to make event
+
+def task_strip(tasks):
+    """
+    gets tasks elements and return list of tasks names
+    :tasks: list of selenium elements
+    :return: list
+    """
+    tasks_list = []
+    for i in range(0, len(tasks)):
+        task = tasks[i].text.strip()
+        # striping the extensions from the titles
+        if "'" in task:
+            task = task.strip("'")
+        if '"' in task:
+            task = task.strip('"')
+        if "is due" in task:
+            task = task.split("is due")[0].strip()
+        if "תאריך הגשה" in task:
+            task = task.split("תאריך הגשה")[1].strip()
+        tasks_list.append(task)
+    return tasks_list
+
 
 def login_in():
     """
     login in to moodle
     :return: None
     """
-    driver.switch_to.frame(driver.find_element_by_id('content'))
-    driver.switch_to.frame(driver.find_element_by_id('credentials'))
     user_bar = driver.find_element_by_name("Ecom_User_ID")
     user_bar.send_keys(config.MOODLE_USER_NAME)
     pin_bar = driver.find_element_by_name("Ecom_User_Pid")
@@ -139,11 +165,14 @@ def login_in():
     pass_bar = driver.find_element_by_name("Ecom_Password")
     pass_bar.send_keys(config.MOODLE_PASSWORD)
     # finding the logging button
-    login_btn = driver.find_element_by_xpath('/html/body/form/table/tbody/tr[2]/td/table/tbody/tr[7]/td[2]/input')
+    login_btn = driver.find_element_by_name("loginButton2")
     # click the login
     login_btn.click()
 
 
+"""
+Main script
+"""
 
 # Biuld the chrome driver
 options = webdriver.ChromeOptions()
@@ -152,34 +181,37 @@ options.page_load_strategy = 'normal'
 #options.add_argument('--headless')
 driver = webdriver.Chrome(config.DRIVER_PATH, options= options)
 driver.get('https://moodle.tau.ac.il/login/index.php')
-sleep(10) # letting the page to load
+sleep(10)  # letting the page to load
 
 try:
     login_in()
 
+    # looking for the container of the tasks in the page until it loads
     time_table_area = WebDriverWait(driver, 60).until(
-        EC.visibility_of_element_located((By.ID, "page-container-2")))  # looking for the container of the tasks in the page
-    out_table = time_table_area.find_elements_by_class_name('list-group')
-    dates = time_table_area.find_elements_by_tag_name('h5')
-    dates_list = []
-    for i in range(len(dates)):
-        dates_list.append(dates[i].text.strip()) # making a nested list containing the tasks by dates
-    temp_task = []
+        EC.visibility_of_element_located((By.ID, "page-container-2")))
+    out_table = time_table_area.find_elements_by_class_name('list-group')  # finding the tasks elements
+
+    # finding elements under each date
+    elements_under_date = []
     for i in range(len(out_table)):
-        in_table = []
-        in_table.append(out_table[i].find_elements_by_css_selector('h6.event-name'))
-        temp_task.append(in_table)
-    tasks = time_table_area.find_elements_by_tag_name('h6')
-    tasks_list = []
-    for i in range(0, len(tasks), 2):
-        if "'" in tasks[i].text:
-            task = tasks[i].text.split("'", 2)[1].strip()
-            tasks_list.append(task)
-        elif "is due" in tasks[i].text:
-            task = tasks[i].text.split("is due")[0].strip()
-            tasks_list.append(task)
-        else:
-            tasks_list.append(tasks[i].text)
+        elements_under_date.append(out_table[i].find_elements_by_css_selector('h6.event-name'))
+
+    # finding the dates elements
+    dates = time_table_area.find_elements_by_tag_name('h5')
+    temp_dates_list = []
+    for i in range(len(dates)):
+        temp_dates_list.append(dates[i].text.strip())  # making a nested list containing the tasks by dates
+    # making a list containing the dates in direct connection with the relevant task
+    dates_list = []
+    tasks_elements_list = []
+    for i in range(len(elements_under_date)):
+        for j in range(len(elements_under_date[i])):
+            tasks_elements_list.append(elements_under_date[i][j])
+            dates_list.append(temp_dates_list[i])
+    # taking the list of tasks elements and making a list of tasks titles
+    tasks_list = task_strip(tasks_elements_list)
+
+    # getting the courses names and due times
     courses = time_table_area.find_elements_by_tag_name('small')
     courses_list = []
     times_list = []
@@ -187,31 +219,23 @@ try:
         course = courses[i].text.split('-', 1)[1].strip(' "')
         courses_list.append(course)
         times_list.append(courses[i + 1].text)
-    temp_task = []
-    for i in range(len(out_table)):
-        in_table = []
-        in_table.append(out_table[i].find_elements_by_css_selector('h6.event-name'))
-        temp_task.append(in_table)
-    # making a list containing the dates with duplicents
-    new_dates_list = []
-    for i in range(len(temp_task)):
-        for j in range(len(temp_task[i][0])):
-            new_dates_list.append(dates_list[i])
-            
+
+    # making a file with the current run info
     with open(config.INPUT_FILE2, 'w', newline='', encoding='utf-8') as csv_file:
         csv_writer = csv.writer(csv_file)
         csv_writer.writerow(['Course', 'Task', 'Date', 'Time'])
         for i in range(len(courses_list)):
-            csv_writer.writerow([f'{courses_list[i]}', f'{tasks_list[i]}', f'{new_dates_list[i]}', f'{times_list[i]}'])
+            csv_writer.writerow([f'{courses_list[i]}', f'{tasks_list[i]}', f'{dates_list[i]}', f'{times_list[i]}'])
 
-    diff_status = find_diff()  # running the func to see if there is any diff between the file of previous run and the current run
-  
-    if diff_status:   # if diff_status is True then there is a difference between the files to send notification
+    # running the func to see if there is any diff between the file of previous run to th current
+    diff_status = find_diff()
+    # if diff_status is True then there is a difference between the files to send notification/
+    if diff_status:
         send_notification()
 
 except Exception as e:
     print(e)
-    # if there is any error make a file and write the error message
+    # if there is any error make a file and write the message
     with open("Error File.txt", 'w', encoding='utf-8') as t1:
         t1.write(f"{e}")
     raise e
